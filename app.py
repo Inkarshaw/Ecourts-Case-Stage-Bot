@@ -118,9 +118,40 @@ async def begin_case(update, case_type, case_no, year):
 
 async def submit_captcha(update,text,s):
     page=s["page"]
-    cap=await first_visible(page,["input[placeholder='Enter Captcha']","input[placeholder*='Enter Captcha' i]","input[name*='captcha' i]","input[id*='captcha' i]"])
+    cap=await first_visible(page,["input[placeholder='Enter Captcha']","input[placeholder*='captcha' i]","input[name*='captcha' i]","input[id*='captcha' i]"])
     if not cap:
-        await update.message.reply_text("CAPTCHA field was not detected. I need to calibrate this live page.")
+        # eCourts markup can use opaque ids/names. Find the textbox nearest the visible Enter Captcha label.
+        try:
+            label=page.get_by_text(re.compile(r"Enter\s*Captcha",re.I)).last
+            if await label.count():
+                lb=await label.bounding_box()
+                inputs=page.locator("input[type='text'], input:not([type])")
+                best=None; bestdist=10**9
+                for i in range(await inputs.count()):
+                    el=inputs.nth(i)
+                    if not await el.is_visible(): continue
+                    b=await el.bounding_box()
+                    if not b: continue
+                    # captcha textbox is normally on the same row, immediately right of label
+                    dist=abs(b["y"]-lb["y"])+max(0,lb["x"]-b["x"])*4
+                    if b["x"]>=lb["x"] and dist<bestdist:
+                        best,bestdist=el,dist
+                cap=best
+        except: pass
+    if not cap:
+        # Last fallback: on Case Number form the captcha is the final visible text input.
+        vis=[]
+        inputs=page.locator("input[type='text'], input:not([type])")
+        for i in range(await inputs.count()):
+            try:
+                if await inputs.nth(i).is_visible(): vis.append(inputs.nth(i))
+            except: pass
+        if vis: cap=vis[-1]
+    if not cap:
+        shot=f"/tmp/captcha_field_error_{update.effective_chat.id}.png"
+        await page.screenshot(path=shot,full_page=False)
+        with open(shot,"rb") as fh:
+            await update.message.reply_photo(fh,caption="CAPTCHA field was not detected. This is the live browser screen used for calibration.")
         return
     await cap.fill(text)
     clicked=await click_text(page,["Go","Search","Submit"])
