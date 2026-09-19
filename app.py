@@ -30,7 +30,7 @@ async def click_text(page, names):
 
 async def begin_case(update, case_type, case_no, year):
     chat=update.effective_chat.id
-    await update.message.reply_text("Opening eCourts → Case Status → Case Number…")
+    await update.message.reply_text("Opening eCourts → Case Status → Tamil Nadu → Chennai → Court Complex → Case Number…")
     pw=await async_playwright().start()
     browser=await pw.chromium.launch(headless=True,args=["--no-sandbox","--disable-dev-shm-usage"])
     page=await browser.new_page(viewport={"width":1280,"height":900})
