@@ -75,28 +75,38 @@ async def begin_case(update, case_type, case_no, year):
         await page.wait_for_timeout(1200)
 
         # Fill by labels/placeholders first; fall back to likely input/select ordering.
-        # Identify the Case Type dropdown by its options. eCourts labels are
-        # "CC - Calendar Case", etc.; selecting the bare "CC" label therefore fails.
+        # Scope everything to the visible "Search by Case Number" form.
+        # The page keeps several search forms in the DOM, so scanning all visible selects
+        # can hit the wrong Case Type control.
+        heading=page.get_by_text(re.compile(r"Case Status\\s*:\\s*Search by Case Number",re.I)).last
+        form=None
+        if await heading.count():
+            try:
+                form=heading.locator("xpath=ancestor::*[.//select and .//input[contains(@placeholder,'Case Number')]][1]")
+                if not await form.count(): form=None
+            except: form=None
+
         type_sel=None
-        all_selects=page.locator("select")
+        scope=form if form else page
+        all_selects=scope.locator("select")
         for i in range(await all_selects.count()):
             el=all_selects.nth(i)
             try:
-                if not await el.is_visible(): continue
                 opts=await el.locator("option").all_text_contents()
                 match=next((o for o in opts if re.match(r"^\\s*"+re.escape(case_type)+r"\\s*-",o,re.I)),None)
                 if match:
                     type_sel=el
                     await el.select_option(label=match)
+                    await page.wait_for_timeout(250)
                     break
             except: pass
         if not type_sel:
-            raise RuntimeError(f"Case Type {case_type} not found")
+            raise RuntimeError(f"Case Type {case_type} not found in Case Number form")
 
-        num=await first_visible(page,["input[name*='case_no' i]","input[id*='case_no' i]","input[name*='caseno' i]","input[id*='caseno' i]"])
+        num=await first_visible(page,["input[placeholder='Case Number']","input[name*='case_no' i]","input[id*='case_no' i]","input[name*='caseno' i]","input[id*='caseno' i]"])
         if num: await num.fill(case_no)
 
-        yr=await first_visible(page,["input[name*='year' i]","input[id*='year' i]","select[name*='year' i]","select[id*='year' i]"])
+        yr=await first_visible(page,["input[placeholder='Year']","input[name*='year' i]","input[id*='year' i]","select[name*='year' i]","select[id*='year' i]"])
         if yr:
             try:
                 if await yr.evaluate("(e)=>e.tagName")=="SELECT": await yr.select_option(label=year)
