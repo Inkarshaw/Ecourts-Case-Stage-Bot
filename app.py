@@ -64,9 +64,15 @@ async def begin_case(update, case_type, case_no, year):
             raise RuntimeError("Court Complex Singaravelar Maaligai not found")
 
         await page.wait_for_timeout(1200)
-        if not await click_text(page,["Case Number"]):
-            raise RuntimeError("Case Number tab not found")
-        await page.wait_for_timeout(1000)
+        # Click the Case Number TAB specifically (not a generic text occurrence).
+        tab=page.get_by_role("tab", name=re.compile(r"Case Number", re.I))
+        if await tab.count():
+            await tab.first.click()
+        else:
+            candidates=page.get_by_text("Case Number", exact=True)
+            if not await candidates.count(): raise RuntimeError("Case Number tab not found")
+            await candidates.first.click()
+        await page.wait_for_timeout(1200)
 
         # Fill by labels/placeholders first; fall back to likely input/select ordering.
         type_sel=await first_visible(page,["select[name*='case_type' i]","select[id*='case_type' i]","select[name*='casetype' i]","select[id*='casetype' i]"])
@@ -87,10 +93,19 @@ async def begin_case(update, case_type, case_no, year):
             except: pass
 
         # Locate CAPTCHA image and send a tight screenshot when possible.
-        captcha=await first_visible(page,["img[id*='captcha' i]","img[src*='captcha' i]","canvas[id*='captcha' i]"])
+        # eCourts renders the captcha as a visible text/image-like box next to the Captcha label.
+        captcha=await first_visible(page,["img[id*='captcha' i]","img[src*='captcha' i]","canvas[id*='captcha' i]",".captcha",".captcha_box","[id*='captcha' i]:not(input)"])
         shot=f"/tmp/captcha_{chat}.png"
-        if captcha: await captcha.screenshot(path=shot)
-        else: await page.screenshot(path=shot,full_page=False)
+        if captcha:
+            await captcha.screenshot(path=shot)
+        else:
+            # Crop the form region around the Enter Captcha input rather than the whole page.
+            cap_input=await first_visible(page,["input[placeholder='Enter Captcha']","input[placeholder*='Enter Captcha' i]"])
+            if cap_input:
+                box=await cap_input.bounding_box()
+                await page.screenshot(path=shot,clip={"x":max(0,box["x"]-310),"y":max(0,box["y"]-25),"width":min(620,1280-max(0,box["x"]-310)),"height":90})
+            else:
+                await page.screenshot(path=shot,full_page=False)
 
         sessions[chat]={"pw":pw,"browser":browser,"page":page,"case_type":case_type,"case_no":case_no,"year":year}
         with open(shot,"rb") as f:
@@ -103,7 +118,7 @@ async def begin_case(update, case_type, case_no, year):
 
 async def submit_captcha(update,text,s):
     page=s["page"]
-    cap=await first_visible(page,["input[name*='captcha' i]","input[id*='captcha' i]","input[placeholder*='captcha' i]"])
+    cap=await first_visible(page,["input[placeholder='Enter Captcha']","input[placeholder*='Enter Captcha' i]","input[name*='captcha' i]","input[id*='captcha' i]"])
     if not cap:
         await update.message.reply_text("CAPTCHA field was not detected. I need to calibrate this live page.")
         return
