@@ -184,26 +184,57 @@ async def submit_captcha(update,text,s):
         await update.message.reply_text(f"No case record found. Submitted: {submitted}.")
         return
 
+    # Do not mistake the site's global navigation ("CNR Number / Case Status / Court Orders")
+    # for an actual case result. A successful Case Number search first shows a result row
+    # with a View action; open it before parsing case details.
+    view=page.get_by_text(re.compile(r"^View$",re.I))
+    if await view.count():
+        try:
+            for i in range(await view.count()):
+                if await view.nth(i).is_visible():
+                    await view.nth(i).click()
+                    await page.wait_for_timeout(2500)
+                    body=await page.locator("body").inner_text()
+                    low=body.lower()
+                    break
+        except: pass
+
+    # Require detail-page labels, not header/menu text.
+    detail_keys=["case details","case history","case status details","registration date",
+                 "first hearing date","next hearing date","stage of case",
+                 "nature of disposal","petitioner and advocate","respondent and advocate"]
+    is_detail=any(k in low for k in detail_keys)
+
+    if not is_detail:
+        if "search by case number" in low and "enter captcha" in low:
+            await update.message.reply_text(f"eCourts stayed on the search form after Go. Submitted: {submitted}. The CAPTCHA or a case field was not accepted.")
+        else:
+            # Send a compact live-page excerpt so the next parser calibration uses the real result markup.
+            lines=[x.strip() for x in body.splitlines() if x.strip()]
+            useful=[]
+            for line in lines:
+                if line.lower() not in ["cnr number","case status","court orders","cause list"]:
+                    useful.append(line)
+            await update.message.reply_text("Search submitted, but the actual case-detail page was not opened yet. Live result excerpt:\\n\\n"+"\\n".join(useful[-35:])[:3000])
+        return
+
     lines=[x.strip() for x in body.splitlines() if x.strip()]
-    labels=["CNR Number","Case Status","Stage of Case","Purpose of hearing","Next Hearing Date","Next Date","Decision Date","Court Number and Judge"]
+    wanted=["CNR Number","Case Type","Filing Number","Filing Date","Registration Number",
+            "Registration Date","First Hearing Date","Next Hearing Date","Case Stage",
+            "Stage of Case","Court Number and Judge","Nature of Disposal"]
     found=[]
-    for label in labels:
+    for label in wanted:
         for i,line in enumerate(lines):
             if label.lower() in line.lower():
+                # Include the label plus nearby value lines from the detail table.
                 snippet=" | ".join(lines[i:i+3])
                 if snippet not in found: found.append(snippet)
                 break
 
-    # A real result should contain result-specific labels; otherwise report form persistence.
-    result_specific=any(k.lower() in low for k in ["cnr number","stage of case","next hearing date","court number and judge"])
-    if not result_specific and "search by case number" in low and "enter captcha" in low:
-        await update.message.reply_text(f"eCourts stayed on the search form after Go. Submitted: {submitted}. The CAPTCHA or a case field was not accepted.")
-        return
-
-    if found:
-        await update.message.reply_text(f"Case: {case_type} {case_no}/{year}\\n\\n"+"\\n".join(found[:8]))
-    else:
-        await update.message.reply_text(f"Submission completed for {submitted}, but the returned case-detail layout needs parser calibration.")
+    await update.message.reply_text(
+        f"Case: {case_type} {case_no}/{year}\\n\\n" +
+        ("\\n".join(found[:12]) if found else "Case detail page opened; field parser needs one final calibration.")
+    )
 
 async def handle(update:Update, context:ContextTypes.DEFAULT_TYPE):
     text=(update.message.text or "").strip()
