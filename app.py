@@ -60,8 +60,8 @@ async def begin_case(update, case_type, case_no, year):
             raise RuntimeError("State Tamil Nadu not found")
         if not await choose_by_text(["Chennai"]):
             raise RuntimeError("District Chennai not found")
-        if not await choose_by_text(["Singaravelar","Maaligai"]):
-            raise RuntimeError("Court Complex Singaravelar Maaligai not found")
+        if not await choose_by_text(["C M M Court","Egmore"]):
+            raise RuntimeError("Court Complex C M M Court, Egmore not found")
 
         await page.wait_for_timeout(1200)
         # Click the Case Number TAB specifically (not a generic text occurrence).
@@ -75,12 +75,23 @@ async def begin_case(update, case_type, case_no, year):
         await page.wait_for_timeout(1200)
 
         # Fill by labels/placeholders first; fall back to likely input/select ordering.
-        type_sel=await first_visible(page,["select[name*='case_type' i]","select[id*='case_type' i]","select[name*='casetype' i]","select[id*='casetype' i]"])
-        if type_sel:
-            try: await type_sel.select_option(label=case_type)
-            except:
-                try: await type_sel.select_option(value=case_type)
-                except: pass
+        # Identify the Case Type dropdown by its options. eCourts labels are
+        # "CC - Calendar Case", etc.; selecting the bare "CC" label therefore fails.
+        type_sel=None
+        all_selects=page.locator("select")
+        for i in range(await all_selects.count()):
+            el=all_selects.nth(i)
+            try:
+                if not await el.is_visible(): continue
+                opts=await el.locator("option").all_text_contents()
+                match=next((o for o in opts if re.match(r"^\\s*"+re.escape(case_type)+r"\\s*-",o,re.I)),None)
+                if match:
+                    type_sel=el
+                    await el.select_option(label=match)
+                    break
+            except: pass
+        if not type_sel:
+            raise RuntimeError(f"Case Type {case_type} not found")
 
         num=await first_visible(page,["input[name*='case_no' i]","input[id*='case_no' i]","input[name*='caseno' i]","input[id*='caseno' i]"])
         if num: await num.fill(case_no)
@@ -91,6 +102,13 @@ async def begin_case(update, case_type, case_no, year):
                 if await yr.evaluate("(e)=>e.tagName")=="SELECT": await yr.select_option(label=year)
                 else: await yr.fill(year)
             except: pass
+
+        # Verify the required case type really remained selected before asking for CAPTCHA.
+        selected_case_type=""
+        try: selected_case_type=(await type_sel.locator("option:checked").inner_text()).strip()
+        except: pass
+        if not re.match(r"^"+re.escape(case_type)+r"\\s*-",selected_case_type,re.I):
+            raise RuntimeError(f"Case Type selection failed: {selected_case_type or 'Select Case Type'}")
 
         # Locate CAPTCHA image and send a tight screenshot when possible.
         # eCourts renders the captcha as a visible text/image-like box next to the Captcha label.
