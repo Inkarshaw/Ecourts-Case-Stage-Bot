@@ -118,49 +118,92 @@ async def begin_case(update, case_type, case_no, year):
 
 async def submit_captcha(update,text,s):
     page=s["page"]
-    cap=await first_visible(page,["input[placeholder='Enter Captcha']","input[placeholder*='captcha' i]","input[name*='captcha' i]","input[id*='captcha' i]"])
-    if not cap:
-        # eCourts markup can use opaque ids/names. Find the textbox nearest the visible Enter Captcha label.
+    case_type=s["case_type"].strip().upper(); case_no=s["case_no"].strip(); year=s["year"].strip()
+
+    # Re-assert case type immediately before submission.
+    type_sel=None
+    sels=page.locator("select")
+    for i in range(await sels.count()):
+        el=sels.nth(i)
         try:
-            label=page.get_by_text(re.compile(r"Enter\s*Captcha",re.I)).last
-            if await label.count():
-                lb=await label.bounding_box()
-                inputs=page.locator("input[type='text'], input:not([type])")
-                best=None; bestdist=10**9
-                for i in range(await inputs.count()):
-                    el=inputs.nth(i)
-                    if not await el.is_visible(): continue
-                    b=await el.bounding_box()
-                    if not b: continue
-                    # captcha textbox is normally on the same row, immediately right of label
-                    dist=abs(b["y"]-lb["y"])+max(0,lb["x"]-b["x"])*4
-                    if b["x"]>=lb["x"] and dist<bestdist:
-                        best,bestdist=el,dist
-                cap=best
+            if not await el.is_visible(): continue
+            opts=await el.locator("option").all_text_contents()
+            match=next((o for o in opts if re.match(r"^\\s*"+re.escape(case_type)+r"\\s*-",o,re.I)),None)
+            if match:
+                type_sel=el; await el.select_option(label=match); break
         except: pass
+
+    # Visible text inputs on Case Number form: case number, year, captcha.
+    inputs=page.locator("input[type='text'], input:not([type])")
+    vis=[]
+    for i in range(await inputs.count()):
+        try:
+            if await inputs.nth(i).is_visible(): vis.append(inputs.nth(i))
+        except: pass
+
+    num=await first_visible(page,["input[name*='case_no' i]","input[id*='case_no' i]","input[name*='caseno' i]","input[id*='caseno' i]"])
+    yr=await first_visible(page,["input[name*='year' i]","input[id*='year' i]"])
+    cap=await first_visible(page,["input[placeholder='Enter Captcha']","input[placeholder*='captcha' i]","input[name*='captcha' i]","input[id*='captcha' i]"])
+
+    # Position fallbacks based on the live Case Number form.
+    if not num and len(vis)>=3: num=vis[-3]
+    if not yr and len(vis)>=3: yr=vis[-2]
+    if not cap and vis: cap=vis[-1]
+
+    if num: await num.fill(case_no)
+    if yr: await yr.fill(year)
     if not cap:
-        # Last fallback: on Case Number form the captcha is the final visible text input.
-        vis=[]
-        inputs=page.locator("input[type='text'], input:not([type])")
-        for i in range(await inputs.count()):
-            try:
-                if await inputs.nth(i).is_visible(): vis.append(inputs.nth(i))
-            except: pass
-        if vis: cap=vis[-1]
-    if not cap:
-        shot=f"/tmp/captcha_field_error_{update.effective_chat.id}.png"
-        await page.screenshot(path=shot,full_page=False)
-        with open(shot,"rb") as fh:
-            await update.message.reply_photo(fh,caption="CAPTCHA field was not detected. This is the live browser screen used for calibration.")
+        await update.message.reply_text("CAPTCHA field could not be located.")
         return
-    await cap.fill(text)
-    clicked=await click_text(page,["Go","Search","Submit"])
-    if not clicked:
-        btn=await first_visible(page,["button[type='submit']","input[type='submit']"])
-        if btn: await btn.click()
-    await page.wait_for_timeout(3000)
-    body=(await page.locator("body").inner_text())[:7000]
-    await update.message.reply_text("eCourts result:\n\n"+body[:3500])
+    await cap.fill(text.strip())
+
+    selected_type=""
+    if type_sel:
+        try: selected_type=await type_sel.locator("option:checked").inner_text()
+        except: pass
+    actual_no=await num.input_value() if num else ""
+    actual_year=await yr.input_value() if yr else ""
+
+    # Click the actual Go button.
+    go=page.get_by_role("button",name=re.compile(r"^Go$",re.I))
+    if await go.count(): await go.first.click()
+    else:
+        if not await click_text(page,["Go"]):
+            btn=await first_visible(page,["button[type='submit']","input[type='submit']"])
+            if btn: await btn.click()
+    await page.wait_for_timeout(3500)
+
+    body=await page.locator("body").inner_text()
+    low=body.lower()
+    submitted=f"{selected_type or case_type} | {actual_no or case_no}/{actual_year or year}"
+
+    if "invalid captcha" in low or "captcha is invalid" in low or "wrong captcha" in low:
+        await update.message.reply_text(f"Invalid CAPTCHA. Submitted: {submitted}. Send the case again for a fresh CAPTCHA.")
+        return
+    if "no record found" in low or "case not found" in low or "record not found" in low:
+        await update.message.reply_text(f"No case record found. Submitted: {submitted}.")
+        return
+
+    lines=[x.strip() for x in body.splitlines() if x.strip()]
+    labels=["CNR Number","Case Status","Stage of Case","Purpose of hearing","Next Hearing Date","Next Date","Decision Date","Court Number and Judge"]
+    found=[]
+    for label in labels:
+        for i,line in enumerate(lines):
+            if label.lower() in line.lower():
+                snippet=" | ".join(lines[i:i+3])
+                if snippet not in found: found.append(snippet)
+                break
+
+    # A real result should contain result-specific labels; otherwise report form persistence.
+    result_specific=any(k.lower() in low for k in ["cnr number","stage of case","next hearing date","court number and judge"])
+    if not result_specific and "search by case number" in low and "enter captcha" in low:
+        await update.message.reply_text(f"eCourts stayed on the search form after Go. Submitted: {submitted}. The CAPTCHA or a case field was not accepted.")
+        return
+
+    if found:
+        await update.message.reply_text(f"Case: {case_type} {case_no}/{year}\\n\\n"+"\\n".join(found[:8]))
+    else:
+        await update.message.reply_text(f"Submission completed for {submitted}, but the returned case-detail layout needs parser calibration.")
 
 async def handle(update:Update, context:ContextTypes.DEFAULT_TYPE):
     text=(update.message.text or "").strip()
