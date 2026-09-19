@@ -38,8 +38,34 @@ async def begin_case(update, case_type, case_no, year):
         await page.goto("https://services.ecourts.gov.in/ecourtindia_v6/",wait_until="domcontentloaded",timeout=60000)
         await page.wait_for_timeout(2000)
         await click_text(page,["Case Status"])
-        await page.wait_for_timeout(1000)
-        await click_text(page,["Case Number"])
+        await page.wait_for_timeout(1200)
+
+        # eCourts requires State -> District -> Court Complex before Case Number.
+        selects=page.locator("select")
+        async def choose_by_text(words):
+            for i in range(await selects.count()):
+                el=selects.nth(i)
+                try:
+                    if not await el.is_visible(): continue
+                    options=await el.locator("option").all_text_contents()
+                    for opt in options:
+                        if all(w.lower() in opt.lower() for w in words):
+                            await el.select_option(label=opt)
+                            await page.wait_for_timeout(1500)
+                            return True
+                except: pass
+            return False
+
+        if not await choose_by_text(["Tamil","Nadu"]):
+            raise RuntimeError("State Tamil Nadu not found")
+        if not await choose_by_text(["Chennai"]):
+            raise RuntimeError("District Chennai not found")
+        if not await choose_by_text(["Singaravelar","Maaligai"]):
+            raise RuntimeError("Court Complex Singaravelar Maaligai not found")
+
+        await page.wait_for_timeout(1200)
+        if not await click_text(page,["Case Number"]):
+            raise RuntimeError("Case Number tab not found")
         await page.wait_for_timeout(1000)
 
         # Fill by labels/placeholders first; fall back to likely input/select ordering.
