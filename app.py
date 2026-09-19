@@ -199,15 +199,25 @@ async def submit_captcha(update,text,s):
                     break
         except: pass
 
-    # Require detail-page labels, not header/menu text.
-    detail_keys=["case details","case history","case status details","registration date",
-                 "first hearing date","next hearing date","stage of case",
-                 "nature of disposal","petitioner and advocate","respondent and advocate"]
+    # Require detail-page labels, not generic menu/help text.  "Case Type" and
+    # navigation headings alone are NOT evidence that a case result was opened.
+    detail_keys=["registration date","first hearing date","next hearing date","stage of case",
+                 "nature of disposal","petitioner and advocate","respondent and advocate",
+                 "case history"]
     is_detail=any(k in low for k in detail_keys)
 
+    # If the search form is still visible, it always wins over weak detail matches.
+    still_search=("search by case number" in low and "enter captcha" in low and "fields marked with" in low)
+    if still_search:
+        is_detail=False
+
     if not is_detail:
-        if "search by case number" in low and "enter captcha" in low:
-            await update.message.reply_text(f"eCourts stayed on the search form after Go. Submitted: {submitted}. The CAPTCHA or a case field was not accepted.")
+        if still_search:
+            shot=f"/tmp/after_go_{update.effective_chat.id}.png"
+            await page.screenshot(path=shot,full_page=False)
+            await update.message.reply_text(f"eCourts stayed on the Case Number search form after Go. Submitted: {submitted}.")
+            with open(shot,"rb") as fh:
+                await update.message.reply_photo(fh,caption="Browser screen immediately after Go. Send me this screenshot if the form appears filled or shows an error.")
         else:
             # Send a compact live-page excerpt so the next parser calibration uses the real result markup.
             lines=[x.strip() for x in body.splitlines() if x.strip()]
