@@ -133,10 +133,23 @@ async def begin_case(update, case_type, case_no, year):
     browser=await pw.chromium.launch(headless=True,args=["--no-sandbox","--disable-dev-shm-usage"])
     page=await browser.new_page(viewport={"width":1280,"height":900})
     try:
+        # Always start with a fresh eCourts session. The site can retain an expired
+        # app_token/session between sequential queue cases and show "User Search Page not found".
+        await page.context.clear_cookies()
         await page.goto("https://services.ecourts.gov.in/ecourtindia_v6/",wait_until="domcontentloaded",timeout=60000)
         await page.wait_for_timeout(2000)
         await click_text(page,["Case Status"])
-        await page.wait_for_timeout(1200)
+        await page.wait_for_timeout(1800)
+
+        # If eCourts rejected the generated search session/token, reload the home page
+        # and enter Case Status once more instead of trying to locate State on the CNR page.
+        body0=(await page.locator("body").inner_text()).lower()
+        if "user search page not found" in body0:
+            await page.context.clear_cookies()
+            await page.goto("https://services.ecourts.gov.in/ecourtindia_v6/",wait_until="domcontentloaded",timeout=60000)
+            await page.wait_for_timeout(2200)
+            await click_text(page,["Case Status"])
+            await page.wait_for_timeout(1800)
 
         # eCourts requires State -> District -> Court Complex before Case Number.
         selects=page.locator("select")
