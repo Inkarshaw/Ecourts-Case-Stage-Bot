@@ -136,12 +136,12 @@ async def begin_case(update, case_type, case_no, year):
             raise RuntimeError("Visible Enter Captcha input not found")
         box=await cap_input.bounding_box()
         vp=page.viewport_size or {"width":1280,"height":720}
-        # Captcha challenge is immediately to the left of the input. Include both so
-        # the human can clearly read the challenge and confirm the correct field.
-        x=max(0,box["x"]-430)
-        y=max(0,box["y"]-35)
-        width=min(760,vp["width"]-x)
-        height=min(120,vp["height"]-y)
+        # The challenge itself is rendered left of the speaker/refresh controls.
+        # Use a much wider crop so it includes the challenge text, not just the controls.
+        x=max(0,box["x"]-700)
+        y=max(0,box["y"]-45)
+        width=min(1000,vp["width"]-x)
+        height=min(145,vp["height"]-y)
         await page.screenshot(path=shot,clip={"x":x,"y":y,"width":width,"height":height})
 
         sessions[chat]={"pw":pw,"browser":browser,"page":page,"case_type":case_type,"case_no":case_no,"year":year}
