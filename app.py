@@ -306,85 +306,102 @@ async def submit_captcha(update,text,s):
         return
 
     # Build a compact Telegram result from the real case-detail page.
-    clean=" ".join(body.split())
+    # Keep line structure: eCourts detail tables are easier to parse from adjacent lines
+    # than from one flattened string.
+    lines=[x.strip() for x in body.splitlines() if x.strip()]
+    clean=" ".join(lines)
+
     def grab(pattern):
         m=re.search(pattern,clean,re.I)
-        return m.group(1).strip() if m else ""
+        return m.group(1).strip(" :-|") if m else ""
 
-    filing=grab(r"Filing Number\\s+([^|]+?)(?=Filing Date)")
-    filing_date=grab(r"Filing Date\\s+([^|]+?)(?=Registration Number)")
-    reg=grab(r"Registration Number\\s+([^|]+?)(?=Registration Date)")
-    reg_date=grab(r"Registration Date\\s+([^|]+?)(?=CNR Number)")
-    cnr=grab(r"CNR Number\\s+([A-Z0-9]+)")
-    first=grab(r"First Hearing Date\\s+(.+?)(?=Next Hearing Date)")
-    nxt=grab(r"Next Hearing Date\\s+(.+?)(?=Case Stage)")
-    stage=grab(r"Case Stage\\s+(.+?)(?=Court Number and Judge)")
-    judge=grab(r"Court Number and Judge\\s+(.+?)(?=Petitioner and Advocate)")
-    efno=grab(r"e-Filing Number\\s+(.+?)(?=e-Filing Date)")
-    efdate=grab(r"e-Filing Date\\s+(.+?)(?=First Hearing Date|Case Status|$)")
-    fir_no=grab(r"FIR Number\\s+(.+?)(?=Police Station|FIR Date|State|District|$)")
-    fir_ps=grab(r"Police Station\\s+(.+?)(?=FIR Number|FIR Date|State|District|$)")
-    fir_date=grab(r"FIR Date\\s+(.+?)(?=Police Station|FIR Number|State|District|$)")
+    def after_label(label, stop_labels):
+        # Supports both "Label Value" and label/value on adjacent table lines.
+        for i,line in enumerate(lines):
+            lowline=line.lower()
+            ll=label.lower()
+            if lowline.startswith(ll):
+                rest=line[len(label):].strip(" :-|")
+                if rest: return rest
+                if i+1<len(lines): return lines[i+1].strip(" :-|")
+        stop="|".join(re.escape(x) for x in stop_labels)
+        return grab(re.escape(label)+r"\\s*:?\\s*(.+?)(?="+stop+r"|$)") if stop else ""
+
+    filing=after_label("Filing Number",["Filing Date","Registration Number"])
+    filing_date=after_label("Filing Date",["Registration Number","Registration Date"])
+    reg=after_label("Registration Number",["Registration Date","CNR Number"])
+    reg_date=after_label("Registration Date",["CNR Number","e-Filing Number"])
+    cnr=grab(r"CNR Number\\s*:?\\s*([A-Z0-9]{12,})")
+    first=after_label("First Hearing Date",["Next Hearing Date","Case Stage"])
+    nxt=after_label("Next Hearing Date",["Case Stage","Court Number and Judge"])
+    stage=after_label("Case Stage",["Court Number and Judge","Petitioner and Advocate"])
+    judge=after_label("Court Number and Judge",["Petitioner and Advocate","Respondent and Advocate"])
+    efno=after_label("e-Filing Number",["e-Filing Date","First Hearing Date"])
+    efdate=after_label("e-Filing Date",["First Hearing Date","Next Hearing Date"])
+
+    # FIR section labels vary slightly across eCourts establishments.
+    fir_no=after_label("FIR Number",["Police Station","Police Station Name","FIR Date","Year"])
+    fir_ps=after_label("Police Station",["FIR Number","FIR Date","Year","State"])
+    if not fir_ps: fir_ps=after_label("Police Station Name",["FIR Number","FIR Date","Year","State"])
+    fir_date=after_label("FIR Date",["Police Station","FIR Number","Year","State"])
 
     parts=[f"📄 {case_type} {case_no}/{year}"]
     if cnr: parts.append(f"CNR: {cnr}")
-    if first: parts.append(f"First Hearing: {first}")
     if judge: parts.append(f"Court/Judge: {judge}")
     if reg: parts.append(f"Registration: {reg}" + (f" ({reg_date})" if reg_date else ""))
     if filing: parts.append(f"Filing: {filing}" + (f" ({filing_date})" if filing_date else ""))
     if efno: parts.append(f"e-Filing: {efno}" + (f" ({efdate})" if efdate else ""))
+
     if fir_no or fir_ps or fir_date:
-        parts.append("")
-        parts.append("🚔 FIR Details")
+        parts.extend(["","🚔 FIR Details"])
         if fir_no: parts.append(f"FIR Number: {fir_no}")
         if fir_ps: parts.append(f"Police Station: {fir_ps}")
         if fir_date: parts.append(f"FIR Date: {fir_date}")
 
-    # Case History: click the last hearing-date link/row and extract its Business,
-    # Next Purpose and Next Hearing Date. eCourts expands these details on click.
-    try:
-        # Prefer the Case History section, then use the last date-like clickable element.
-        hist=page.get_by_text(re.compile(r"Case History",re.I))
-        hist_scope=page
-        if await hist.count():
-            try:
-                hist_scope=hist.last.locator("xpath=ancestor::*[self::div or self::section or self::table][1]")
-            except: pass
+    # Always show current stage/hearing under the history section, even if expanding
+    # the latest history row fails.
+    parts.extend(["","📚 Latest Case History"])
+    if stage: parts.append(f"Stage: {stage}")
+    if nxt: parts.append(f"Current Next Hearing: {nxt}")
 
-        clickables=hist_scope.locator("a,button,[role='button']")
-        dated=[]
-        for i in range(await clickables.count()):
-            el=clickables.nth(i)
+    # Find the Case History table and click the chronologically latest hearing-date link.
+    try:
+        date_re=re.compile(r"^(\\d{1,2})[-/](\\d{1,2})[-/](\\d{4})$")
+        candidates=[]
+        links=page.locator("a:visible,button:visible,[role='button']:visible")
+        for i in range(await links.count()):
+            el=links.nth(i)
             try:
                 txt=(await el.inner_text()).strip()
-                if re.search(r"\\b\\d{1,2}[-/]\\d{1,2}[-/]\\d{4}\\b|\\b\\d{1,2}(?:st|nd|rd|th)?\\s+[A-Za-z]+\\s+\\d{4}\\b",txt,re.I):
-                    dated.append(el)
+                m=date_re.match(txt)
+                if m:
+                    dd,mm,yyyy=map(int,m.groups())
+                    candidates.append(((yyyy,mm,dd),el,txt))
             except: pass
-        if dated:
-            await dated[-1].click()
-            await page.wait_for_timeout(700)
-            detail=" ".join((await page.locator("body").inner_text()).split())
-            business=grab_from= None
-            def histgrab(pattern):
-                m=re.search(pattern,detail,re.I)
-                return m.group(1).strip() if m else ""
-            business=histgrab(r"Business\\s*:?\\s*(.+?)(?=Next Purpose\\s*:|Next Hearing Date\\s*:|$)")
-            purpose=histgrab(r"Next Purpose\\s*:?\\s*(.+?)(?=Next Hearing Date\\s*:|$)")
-            hist_next=histgrab(r"Next Hearing Date\\s*:?\\s*(.+?)(?=Business\\s*:|Next Purpose\\s*:|$)")
-            if business or purpose or hist_next:
-                parts.append("")
-                parts.append("📚 Latest Case History")
-                if stage: parts.append(f"Stage: {stage}")
-                if nxt: parts.append(f"Current Next Hearing: {nxt}")
-                if business: parts.append(f"Business: {business}")
-                if purpose: parts.append(f"Next Purpose: {purpose}")
-                if hist_next and hist_next.lower()!=nxt.lower(): parts.append(f"History Next Hearing Date: {hist_next}")
-    except Exception:
-        if stage or nxt:
-            parts.append("")
-            parts.append("📚 Case Status")
-            if stage: parts.append(f"Stage: {stage}")
-            if nxt: parts.append(f"Next Hearing: {nxt}")
+        if candidates:
+            candidates.sort(key=lambda x:x[0])
+            _,latest_link,history_date=candidates[-1]
+            await latest_link.click()
+            await page.wait_for_timeout(900)
+
+            dlines=[x.strip() for x in (await page.locator("body").inner_text()).splitlines() if x.strip()]
+            dclean=" ".join(dlines)
+            def dgrab(label,stops):
+                stop="|".join(re.escape(x) for x in stops)
+                m=re.search(re.escape(label)+r"\\s*:?\\s*(.+?)(?="+stop+r"|$)",dclean,re.I)
+                return m.group(1).strip(" :-|") if m else ""
+
+            business=dgrab("Business",["Next Purpose","Next Hearing Date","Purpose of hearing"])
+            purpose=dgrab("Next Purpose",["Next Hearing Date","Business"])
+            if not purpose: purpose=dgrab("Purpose of hearing",["Next Hearing Date","Business"])
+            hist_next=dgrab("Next Hearing Date",["Business","Next Purpose","Purpose of hearing"])
+
+            parts.append(f"Last Hearing: {history_date}")
+            if business: parts.append(f"Business: {business}")
+            if purpose: parts.append(f"Next Purpose: {purpose}")
+            if hist_next: parts.append(f"History Next Hearing: {hist_next}")
+    except Exception as ex:
+        parts.append(f"History detail unavailable: {type(ex).__name__}")
 
     await update.message.reply_text("\\n".join(parts))
 
