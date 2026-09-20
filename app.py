@@ -323,16 +323,23 @@ async def submit_captcha(update,text,s):
     judge=grab(r"Court Number and Judge\\s+(.+?)(?=Petitioner and Advocate)")
     efno=grab(r"e-Filing Number\\s+(.+?)(?=e-Filing Date)")
     efdate=grab(r"e-Filing Date\\s+(.+?)(?=First Hearing Date|Case Status|$)")
+    fir_no=grab(r"FIR Number\\s+(.+?)(?=Police Station|FIR Date|State|District|$)")
+    fir_ps=grab(r"Police Station\\s+(.+?)(?=FIR Number|FIR Date|State|District|$)")
+    fir_date=grab(r"FIR Date\\s+(.+?)(?=Police Station|FIR Number|State|District|$)")
 
     parts=[f"📄 {case_type} {case_no}/{year}"]
     if cnr: parts.append(f"CNR: {cnr}")
-    if stage: parts.append(f"Stage: {stage}")
-    if nxt: parts.append(f"Next Hearing: {nxt}")
     if first: parts.append(f"First Hearing: {first}")
     if judge: parts.append(f"Court/Judge: {judge}")
     if reg: parts.append(f"Registration: {reg}" + (f" ({reg_date})" if reg_date else ""))
     if filing: parts.append(f"Filing: {filing}" + (f" ({filing_date})" if filing_date else ""))
     if efno: parts.append(f"e-Filing: {efno}" + (f" ({efdate})" if efdate else ""))
+    if fir_no or fir_ps or fir_date:
+        parts.append("")
+        parts.append("🚔 FIR Details")
+        if fir_no: parts.append(f"FIR Number: {fir_no}")
+        if fir_ps: parts.append(f"Police Station: {fir_ps}")
+        if fir_date: parts.append(f"FIR Date: {fir_date}")
 
     # Case History: click the last hearing-date link/row and extract its Business,
     # Next Purpose and Next Hearing Date. eCourts expands these details on click.
@@ -368,11 +375,17 @@ async def submit_captcha(update,text,s):
             if business or purpose or hist_next:
                 parts.append("")
                 parts.append("📚 Latest Case History")
+                if stage: parts.append(f"Stage: {stage}")
+                if nxt: parts.append(f"Current Next Hearing: {nxt}")
                 if business: parts.append(f"Business: {business}")
                 if purpose: parts.append(f"Next Purpose: {purpose}")
-                if hist_next: parts.append(f"Next Hearing Date: {hist_next}")
+                if hist_next and hist_next.lower()!=nxt.lower(): parts.append(f"History Next Hearing Date: {hist_next}")
     except Exception:
-        pass
+        if stage or nxt:
+            parts.append("")
+            parts.append("📚 Case Status")
+            if stage: parts.append(f"Stage: {stage}")
+            if nxt: parts.append(f"Next Hearing: {nxt}")
 
     await update.message.reply_text("\\n".join(parts))
 
