@@ -55,6 +55,20 @@ def load_pending_cases(limit=50):
 def set_sheet_status(row_no,status):
     get_worksheet().update_cell(row_no,22,status)
 
+def save_case_result(row_no,data):
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+    ws=get_worksheet()
+    values=[[
+        data.get("cnr",""), data.get("fir_no",""), data.get("fir_ps",""), data.get("fir_date",""),
+        data.get("judge",""), data.get("reg",""), data.get("reg_date",""),
+        data.get("filing",""), data.get("filing_date",""), data.get("efno",""), data.get("efdate",""),
+        data.get("stage",""), data.get("nxt",""), data.get("business",""),
+        data.get("purpose",""), data.get("hist_next",""), "Done",
+        datetime.now(ZoneInfo("Asia/Kolkata")).strftime("%d-%m-%Y %I:%M %p")
+    ]]
+    ws.update(values, range_name="F%s:W%s" % (row_no,row_no))
+
 async def start_next_queue_case(update):
     chat=update.effective_chat.id
     q=queues.get(chat)
@@ -476,6 +490,10 @@ async def submit_captcha(update,text,s):
     if nxt: parts.append(f"📅 <b>Next Hearing:</b> {esc(nxt)}")
 
     # Find the Case History table and click the chronologically latest hearing-date link.
+    history_date=""
+    business=""
+    purpose=""
+    hist_next=""
     try:
         date_re=re.compile(r"^(\\d{1,2})[-/](\\d{1,2})[-/](\\d{4})$")
         candidates=[]
@@ -515,6 +533,14 @@ async def submit_captcha(update,text,s):
         pass
 
     await update.message.reply_text("\\n".join(parts),parse_mode="HTML")
+    result_data={
+        "cnr":cnr,"fir_no":fir_no,"fir_ps":fir_ps,"fir_date":fir_date,
+        "judge":judge,"reg":reg,"reg_date":reg_date,"filing":filing,"filing_date":filing_date,
+        "efno":efno,"efdate":efdate,"stage":stage,"nxt":nxt,
+        "business":business,"purpose":purpose,"hist_next":hist_next
+    }
+    if s.get("sheet_row"):
+        await asyncio.to_thread(save_case_result,s["sheet_row"],result_data)
     return True
 
 async def handle(update:Update, context:ContextTypes.DEFAULT_TYPE):
