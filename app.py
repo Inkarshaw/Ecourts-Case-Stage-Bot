@@ -64,7 +64,7 @@ async def updatecases(update:Update, context:ContextTypes.DEFAULT_TYPE):
         limit=max(1,min(limit,200))
         cases=await asyncio.to_thread(load_pending_cases,limit)
     except Exception as ex:
-        await update.message.reply_text("Google Sheet error: %s: %s" % (type(ex).__name__,str(ex)[:500]))
+        await update.message.reply_text("Google Sheet error: %s: %r" % (type(ex).__name__,ex))
         return
     if not cases:
         await update.message.reply_text("No pending cases found in the Cases sheet.")
