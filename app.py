@@ -97,7 +97,9 @@ async def begin_case(update, case_type, case_no, year):
             o=opts.nth(i)
             txt=(await o.inner_text()).strip()
             val=(await o.get_attribute("value")) or ""
-            if re.match(r"^"+re.escape(case_type)+r"\\s*-",txt,re.I) or val.strip().upper()==case_type:
+            # case_type is already plain text such as "CC"; match "CC - Calendar Case".
+            # Do not double-escape the regex whitespace token.
+            if txt.upper().startswith(case_type.upper()+" -") or val.strip().upper()==case_type.upper():
                 chosen=val; break
         if chosen is None:
             # Diagnostic includes the actual live option list instead of a generic RuntimeError.
@@ -118,7 +120,7 @@ async def begin_case(update, case_type, case_no, year):
 
         selected_case_type=(await type_sel.locator("option:checked").inner_text()).strip()
         actual_no=await num.input_value(); actual_year=await yr.input_value()
-        if not re.match(r"^"+re.escape(case_type)+r"\\s*-",selected_case_type,re.I):
+        if not selected_case_type.upper().startswith(case_type.upper()+" -"):
             raise RuntimeError(f"Case Type selection failed after change: {selected_case_type}")
         if actual_no != case_no or actual_year != year:
             raise RuntimeError(f"Case fields failed: {actual_no}/{actual_year}")
