@@ -75,47 +75,51 @@ async def begin_case(update, case_type, case_no, year):
         await page.wait_for_timeout(1200)
 
         # Fill by labels/placeholders first; fall back to likely input/select ordering.
-        # The visible Case Number form is now stable. eCourts may populate the
-        # case-type dropdown lazily, so wait for the CC/AP/etc. options before selecting.
+        # Work from the visible Case Number controls. Do not rely on eCourts'
+        # select option text being present in the initial DOM: populate/select through
+        # the visible control and dispatch the same change/input events a user action does.
+        all_selects=page.locator("select:visible")
         type_sel=None
-        match_label=None
-        for attempt in range(20):
-            all_selects=page.locator("select:visible")
-            for i in range(await all_selects.count()):
-                el=all_selects.nth(i)
-                try:
-                    opts=await el.locator("option").all_text_contents()
-                    match=next((o for o in opts if re.match(r"^\\s*"+re.escape(case_type)+r"\\s*-",o,re.I)),None)
-                    if match:
-                        type_sel=el; match_label=match; break
-                except: pass
-            if type_sel is not None: break
-            await page.wait_for_timeout(250)
+        for i in range(await all_selects.count()):
+            el=all_selects.nth(i)
+            try:
+                first=(await el.locator("option").first.inner_text()).strip().lower()
+                if "case type" in first:
+                    type_sel=el; break
+            except: pass
         if type_sel is None:
-            raise RuntimeError(f"Case Type {case_type} option did not load")
+            raise RuntimeError("Visible Select Case Type dropdown not found")
 
-        # Select by the option's real value (more reliable than its rendered label on this site).
-        opt=type_sel.locator("option").filter(has_text=re.compile(r"^\\s*"+re.escape(case_type)+r"\\s*-",re.I)).first
-        opt_value=await opt.get_attribute("value")
-        if opt_value is not None:
-            await type_sel.select_option(value=opt_value)
-        else:
-            await type_sel.select_option(label=match_label)
+        # Inspect options and choose CC/AP/etc. by either text prefix or value.
+        opts=type_sel.locator("option")
+        chosen=None
+        for i in range(await opts.count()):
+            o=opts.nth(i)
+            txt=(await o.inner_text()).strip()
+            val=(await o.get_attribute("value")) or ""
+            if re.match(r"^"+re.escape(case_type)+r"\\s*-",txt,re.I) or val.strip().upper()==case_type:
+                chosen=val; break
+        if chosen is None:
+            # Diagnostic includes the actual live option list instead of a generic RuntimeError.
+            texts=await opts.all_text_contents()
+            raise RuntimeError("Case Type option not found. Live options: "+" | ".join(texts[:12]))
+
+        await type_sel.select_option(value=chosen)
+        await type_sel.dispatch_event("change")
         await page.wait_for_timeout(300)
 
-        # Use the exact placeholders visible in the Case Number form.
         num=page.locator("input[placeholder='Case Number']:visible").first
         yr=page.locator("input[placeholder='Year']:visible").first
         if not await num.count(): raise RuntimeError("Visible Case Number input not found")
         if not await yr.count(): raise RuntimeError("Visible Year input not found")
-        await num.fill(case_no)
-        await yr.fill(year)
+        await num.click(); await num.fill(case_no); await num.dispatch_event("input"); await num.dispatch_event("change")
+        await yr.click(); await yr.fill(year); await yr.dispatch_event("input"); await yr.dispatch_event("change")
+        await page.wait_for_timeout(200)
 
         selected_case_type=(await type_sel.locator("option:checked").inner_text()).strip()
-        actual_no=await num.input_value()
-        actual_year=await yr.input_value()
+        actual_no=await num.input_value(); actual_year=await yr.input_value()
         if not re.match(r"^"+re.escape(case_type)+r"\\s*-",selected_case_type,re.I):
-            raise RuntimeError(f"Case Type selection failed: {selected_case_type or 'Select Case Type'}")
+            raise RuntimeError(f"Case Type selection failed after change: {selected_case_type}")
         if actual_no != case_no or actual_year != year:
             raise RuntimeError(f"Case fields failed: {actual_no}/{actual_year}")
 
@@ -140,7 +144,7 @@ async def begin_case(update, case_type, case_no, year):
     except Exception as ex:
         await page.screenshot(path=f"/tmp/error_{chat}.png",full_page=False)
         with open(f"/tmp/error_{chat}.png","rb") as f:
-            await update.message.reply_photo(f,caption=f"Could not reach the Case Number form. Error: {type(ex).__name__}. I saved this screen for selector calibration.")
+            await update.message.reply_photo(f,caption=f"Could not reach the Case Number form. {type(ex).__name__}: {str(ex)[:700]}")
         await browser.close(); await pw.stop()
 
 async def submit_captcha(update,text,s):
