@@ -55,6 +55,30 @@ def load_pending_cases(limit=50):
 def set_sheet_status(row_no,status):
     get_worksheet().update_cell(row_no,22,status)
 
+def ensure_random_sheet():
+    book=sheet_client().open_by_key(SHEET_ID)
+    try:
+        return book.worksheet("Random Cases")
+    except gspread.WorksheetNotFound:
+        ws=book.add_worksheet(title="Random Cases",rows=1000,cols=23)
+        ws.append_row(["S.No.","Court Complex","Case Type","Case Number","Year","CNR","FIR No.","Police Station","FIR Date","Court / Judge","Registration No.","Registration Date","Filing No.","Filing Date","e-Filing No.","e-Filing Date","Stage","Next Hearing","Latest Business","Next Purpose","History Next Hearing","Bot Status","Last Updated"])
+        return ws
+
+def save_random_case(case_type,case_no,year,data):
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+    ws=ensure_random_sheet()
+    serial=max(1,len(ws.get_all_values()))
+    ws.append_row([
+        serial,"C M M Court, Egmore",case_type,case_no,year,
+        data.get("cnr",""),data.get("fir_no",""),data.get("fir_ps",""),data.get("fir_date",""),
+        data.get("judge",""),data.get("reg",""),data.get("reg_date",""),
+        data.get("filing",""),data.get("filing_date",""),data.get("efno",""),data.get("efdate",""),
+        data.get("stage",""),data.get("nxt",""),data.get("business",""),data.get("purpose",""),
+        data.get("hist_next",""),"Done",
+        datetime.now(ZoneInfo("Asia/Kolkata")).strftime("%d-%m-%Y %I:%M %p")
+    ])
+
 def save_case_result(row_no,data):
     from datetime import datetime
     from zoneinfo import ZoneInfo
@@ -541,6 +565,8 @@ async def submit_captcha(update,text,s):
     }
     if s.get("sheet_row"):
         await asyncio.to_thread(save_case_result,s["sheet_row"],result_data)
+    else:
+        await asyncio.to_thread(save_random_case,case_type,case_no,year,result_data)
     return True
 
 async def handle(update:Update, context:ContextTypes.DEFAULT_TYPE):
