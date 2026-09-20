@@ -1,14 +1,98 @@
-import os, re, asyncio
+import os, re, asyncio, json
+import gspread
+from google.oauth2.service_account import Credentials
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, ContextTypes, filters
 from playwright.async_api import async_playwright
 
 TOKEN=os.environ["TELEGRAM_BOT_TOKEN"]
+SHEET_ID=os.environ.get("GOOGLE_SHEET_ID","")
 sessions={}
+queues={}
+
 CASE_RE=re.compile(r"^([A-Za-z. -]+)\s+(\d+)\s+(\d{4})$")
 
 async def start(update:Update, context:ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("Send a case as: CC 1001 2025")
+
+
+def get_worksheet():
+    info=json.loads(os.environ["GOOGLE_SERVICE_ACCOUNT_JSON"])
+    creds=Credentials.from_service_account_info(info,scopes=["https://www.googleapis.com/auth/spreadsheets"])
+    return gspread.authorize(creds).open_by_key(SHEET_ID).worksheet("Cases")
+
+def load_pending_cases(limit=50):
+    ws=get_worksheet()
+    rows=ws.get_all_records()
+    result=[]
+    for row_no,row in enumerate(rows,start=2):
+        status=str(row.get("Bot Status","")).strip().lower()
+        if status in ("","pending","retry") and row.get("Case Type") and row.get("Case Number") and row.get("Year"):
+            result.append({
+                "row":row_no,
+                "case_type":str(row["Case Type"]).strip(),
+                "case_no":str(row["Case Number"]).strip(),
+                "year":str(row["Year"]).strip(),
+            })
+            if len(result)>=limit:
+                break
+    return result
+
+def set_sheet_status(row_no,status):
+    get_worksheet().update_cell(row_no,22,status)
+
+async def start_next_queue_case(update):
+    chat=update.effective_chat.id
+    q=queues.get(chat)
+    if not q:
+        return
+    if not q["items"]:
+        await update.message.reply_text("✅ Queue finished: %s/%s processed." % (q["done"],q["total"]))
+        queues.pop(chat,None)
+        return
+    item=q["items"][0]
+    await asyncio.to_thread(set_sheet_status,item["row"],"CAPTCHA Pending")
+    await begin_case(update,item["case_type"],item["case_no"],item["year"])
+    if chat in sessions:
+        sessions[chat]["queue_mode"]=True
+        sessions[chat]["sheet_row"]=item["row"]
+
+async def updatecases(update:Update, context:ContextTypes.DEFAULT_TYPE):
+    chat=update.effective_chat.id
+    try:
+        limit=int(context.args[0]) if context.args else 50
+        limit=max(1,min(limit,200))
+        cases=await asyncio.to_thread(load_pending_cases,limit)
+    except Exception as ex:
+        await update.message.reply_text("Google Sheet error: %s: %s" % (type(ex).__name__,str(ex)[:500]))
+        return
+    if not cases:
+        await update.message.reply_text("No pending cases found in the Cases sheet.")
+        return
+    queues[chat]={"items":cases,"done":0,"total":len(cases)}
+    await update.message.reply_text("📋 Queue started: %s pending case(s). I will send one CAPTCHA at a time." % len(cases))
+    await start_next_queue_case(update)
+
+async def stop_queue(update:Update, context:ContextTypes.DEFAULT_TYPE):
+    chat=update.effective_chat.id
+    queues.pop(chat,None)
+    s=sessions.pop(chat,None)
+    if s:
+        try:
+            await s["browser"].close()
+            await s["pw"].stop()
+        except:
+            pass
+    await update.message.reply_text("Queue stopped.")
+
+async def queue_status(update:Update, context:ContextTypes.DEFAULT_TYPE):
+    q=queues.get(update.effective_chat.id)
+    if not q:
+        await update.message.reply_text("No active case queue.")
+        return
+    item=q["items"][0] if q["items"] else None
+    current=("%s %s/%s" % (item["case_type"],item["case_no"],item["year"])) if item else "finishing"
+    await update.message.reply_text("Queue: %s/%s completed. Current: %s" % (q["done"],q["total"],current))
 
 async def first_visible(page, selectors):
     for sel in selectors:
@@ -404,16 +488,32 @@ async def submit_captcha(update,text,s):
         pass
 
     await update.message.reply_text("\\n".join(parts),parse_mode="HTML")
+    return True
 
 async def handle(update:Update, context:ContextTypes.DEFAULT_TYPE):
     text=(update.message.text or "").strip()
     chat=update.effective_chat.id
     if chat in sessions:
         s=sessions[chat]
-        try: await submit_captcha(update,text,s)
-        except Exception as ex: await update.message.reply_text(f"Submission error: {type(ex).__name__}: {ex}")
+        ok=False
+        try:
+            ok=bool(await submit_captcha(update,text,s))
+        except Exception as ex:
+            await update.message.reply_text(f"Submission error: {type(ex).__name__}: {ex}")
         finally:
             await s["browser"].close(); await s["pw"].stop(); sessions.pop(chat,None)
+        if s.get("queue_mode"):
+            q=queues.get(chat)
+            if ok and q and q["items"]:
+                item=q["items"].pop(0)
+                q["done"]+=1
+                try: await asyncio.to_thread(set_sheet_status,item["row"],"Done")
+                except: pass
+                await start_next_queue_case(update)
+            elif not ok:
+                try: await asyncio.to_thread(set_sheet_status,s["sheet_row"],"Retry")
+                except: pass
+                await update.message.reply_text("This case remains pending. Send /updatecases to retry it.")
         return
     m=CASE_RE.match(text)
     if not m:
@@ -424,6 +524,9 @@ async def handle(update:Update, context:ContextTypes.DEFAULT_TYPE):
 async def main():
     app=Application.builder().token(TOKEN).build()
     app.add_handler(CommandHandler("start",start))
+    app.add_handler(CommandHandler("updatecases",updatecases))
+    app.add_handler(CommandHandler("stop",stop_queue))
+    app.add_handler(CommandHandler("status",queue_status))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND,handle))
     await app.initialize(); await app.start(); await app.updater.start_polling()
     await asyncio.Event().wait()
