@@ -134,18 +134,19 @@ async def begin_case(update, case_type, case_no, year):
             cap_input=await first_visible(page,["input[placeholder*='captcha' i]:visible","input[name*='captcha' i]:visible","input[id*='captcha' i]:visible"])
         if not cap_input:
             raise RuntimeError("Visible Enter Captcha input not found")
-        # Give eCourts one second to finish painting the CAPTCHA challenge.
-        await page.wait_for_timeout(1000)
+        # eCourts paints the CAPTCHA asynchronously. Wait until the challenge area
+        # has had time to render, then capture a stable region around it.
+        await page.wait_for_timeout(1800)
 
         box=await cap_input.bounding_box()
         vp=page.viewport_size or {"width":1280,"height":720}
 
-        # Crop the CAPTCHA challenge only. The previous crop included the
-        # speaker/refresh buttons and clipped the leftmost character, so shift left.
-        x=max(0,box["x"]-355)
-        y=max(0,box["y"]-10)
-        width=min(155,vp["width"]-x)
-        height=min(55,vp["height"]-y)
+        # Capture the complete challenge box with a little padding, but stop before
+        # the speaker button. Coordinates are anchored to the stable Enter Captcha input.
+        x=max(0,box["x"]-390)
+        y=max(0,box["y"]-18)
+        width=min(190,vp["width"]-x)
+        height=min(70,vp["height"]-y)
         await page.screenshot(path=shot,clip={"x":x,"y":y,"width":width,"height":height})
 
         sessions[chat]={"pw":pw,"browser":browser,"page":page,"case_type":case_type,"case_no":case_no,"year":year}
