@@ -334,6 +334,46 @@ async def submit_captcha(update,text,s):
     if filing: parts.append(f"Filing: {filing}" + (f" ({filing_date})" if filing_date else ""))
     if efno: parts.append(f"e-Filing: {efno}" + (f" ({efdate})" if efdate else ""))
 
+    # Case History: click the last hearing-date link/row and extract its Business,
+    # Next Purpose and Next Hearing Date. eCourts expands these details on click.
+    try:
+        # Prefer the Case History section, then use the last date-like clickable element.
+        hist=page.get_by_text(re.compile(r"Case History",re.I))
+        hist_scope=page
+        if await hist.count():
+            try:
+                hist_scope=hist.last.locator("xpath=ancestor::*[self::div or self::section or self::table][1]")
+            except: pass
+
+        clickables=hist_scope.locator("a,button,[role='button']")
+        dated=[]
+        for i in range(await clickables.count()):
+            el=clickables.nth(i)
+            try:
+                txt=(await el.inner_text()).strip()
+                if re.search(r"\\b\\d{1,2}[-/]\\d{1,2}[-/]\\d{4}\\b|\\b\\d{1,2}(?:st|nd|rd|th)?\\s+[A-Za-z]+\\s+\\d{4}\\b",txt,re.I):
+                    dated.append(el)
+            except: pass
+        if dated:
+            await dated[-1].click()
+            await page.wait_for_timeout(700)
+            detail=" ".join((await page.locator("body").inner_text()).split())
+            business=grab_from= None
+            def histgrab(pattern):
+                m=re.search(pattern,detail,re.I)
+                return m.group(1).strip() if m else ""
+            business=histgrab(r"Business\\s*:?\\s*(.+?)(?=Next Purpose\\s*:|Next Hearing Date\\s*:|$)")
+            purpose=histgrab(r"Next Purpose\\s*:?\\s*(.+?)(?=Next Hearing Date\\s*:|$)")
+            hist_next=histgrab(r"Next Hearing Date\\s*:?\\s*(.+?)(?=Business\\s*:|Next Purpose\\s*:|$)")
+            if business or purpose or hist_next:
+                parts.append("")
+                parts.append("📚 Latest Case History")
+                if business: parts.append(f"Business: {business}")
+                if purpose: parts.append(f"Next Purpose: {purpose}")
+                if hist_next: parts.append(f"Next Hearing Date: {hist_next}")
+    except Exception:
+        pass
+
     await update.message.reply_text("\\n".join(parts))
 
 async def handle(update:Update, context:ContextTypes.DEFAULT_TYPE):
