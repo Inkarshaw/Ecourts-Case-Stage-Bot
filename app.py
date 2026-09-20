@@ -306,23 +306,35 @@ async def submit_captcha(update,text,s):
             await update.message.reply_text("Search submitted, but the actual case-detail page was not opened yet. Live result excerpt:\\n\\n"+"\\n".join(useful[-35:])[:3000])
         return
 
-    lines=[x.strip() for x in body.splitlines() if x.strip()]
-    wanted=["CNR Number","Case Type","Filing Number","Filing Date","Registration Number",
-            "Registration Date","First Hearing Date","Next Hearing Date","Case Stage",
-            "Stage of Case","Court Number and Judge","Nature of Disposal"]
-    found=[]
-    for label in wanted:
-        for i,line in enumerate(lines):
-            if label.lower() in line.lower():
-                # Include the label plus nearby value lines from the detail table.
-                snippet=" | ".join(lines[i:i+3])
-                if snippet not in found: found.append(snippet)
-                break
+    # Build a compact Telegram result from the real case-detail page.
+    clean=" ".join(body.split())
+    def grab(pattern):
+        m=re.search(pattern,clean,re.I)
+        return m.group(1).strip() if m else ""
 
-    await update.message.reply_text(
-        f"Case: {case_type} {case_no}/{year}\\n\\n" +
-        ("\\n".join(found[:12]) if found else "Case detail page opened; field parser needs one final calibration.")
-    )
+    filing=grab(r"Filing Number\\s+([^|]+?)(?=Filing Date)")
+    filing_date=grab(r"Filing Date\\s+([^|]+?)(?=Registration Number)")
+    reg=grab(r"Registration Number\\s+([^|]+?)(?=Registration Date)")
+    reg_date=grab(r"Registration Date\\s+([^|]+?)(?=CNR Number)")
+    cnr=grab(r"CNR Number\\s+([A-Z0-9]+)")
+    first=grab(r"First Hearing Date\\s+(.+?)(?=Next Hearing Date)")
+    nxt=grab(r"Next Hearing Date\\s+(.+?)(?=Case Stage)")
+    stage=grab(r"Case Stage\\s+(.+?)(?=Court Number and Judge)")
+    judge=grab(r"Court Number and Judge\\s+(.+?)(?=Petitioner and Advocate)")
+    efno=grab(r"e-Filing Number\\s+(.+?)(?=e-Filing Date)")
+    efdate=grab(r"e-Filing Date\\s+(.+?)(?=First Hearing Date|Case Status|$)")
+
+    parts=[f"📄 {case_type} {case_no}/{year}"]
+    if cnr: parts.append(f"CNR: {cnr}")
+    if stage: parts.append(f"Stage: {stage}")
+    if nxt: parts.append(f"Next Hearing: {nxt}")
+    if first: parts.append(f"First Hearing: {first}")
+    if judge: parts.append(f"Court/Judge: {judge}")
+    if reg: parts.append(f"Registration: {reg}" + (f" ({reg_date})" if reg_date else ""))
+    if filing: parts.append(f"Filing: {filing}" + (f" ({filing_date})" if filing_date else ""))
+    if efno: parts.append(f"e-Filing: {efno}" + (f" ({efdate})" if efdate else ""))
+
+    await update.message.reply_text("\\n".join(parts))
 
 async def handle(update:Update, context:ContextTypes.DEFAULT_TYPE):
     text=(update.message.text or "").strip()
