@@ -17,9 +17,23 @@ async def start(update:Update, context:ContextTypes.DEFAULT_TYPE):
 
 
 def get_worksheet():
-    info=json.loads(os.environ["GOOGLE_SERVICE_ACCOUNT_JSON"])
-    creds=Credentials.from_service_account_info(info,scopes=["https://www.googleapis.com/auth/spreadsheets"])
-    return gspread.authorize(creds).open_by_key(SHEET_ID).worksheet("Cases")
+    try:
+        raw=os.environ["GOOGLE_SERVICE_ACCOUNT_JSON"].strip()
+        info=json.loads(raw)
+    except Exception as ex:
+        raise RuntimeError("Service-account JSON could not be parsed: %s: %s" % (type(ex).__name__,str(ex)))
+    try:
+        creds=Credentials.from_service_account_info(info,scopes=["https://www.googleapis.com/auth/spreadsheets"])
+        client=gspread.authorize(creds)
+        book=client.open_by_key(SHEET_ID)
+        return book.worksheet("Cases")
+    except Exception as ex:
+        detail=getattr(ex,"response",None)
+        status=getattr(detail,"status_code",None) if detail else None
+        body=getattr(detail,"text",None) if detail else None
+        raise RuntimeError("Sheets access failed. service_account=%s status=%s error=%s repr=%r body=%s" % (
+            info.get("client_email","missing"),status,str(ex),ex,(body or "")[:800]
+        ))
 
 def load_pending_cases(limit=50):
     ws=get_worksheet()
