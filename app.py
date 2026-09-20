@@ -66,7 +66,7 @@ def ensure_random_sheet():
 
 def save_random_case(case_type,case_no,year,data):
     from datetime import datetime
-    from zoneinfo import ZoneInfo
+    from datetime import timezone, timedelta
     ws=ensure_random_sheet()
     serial=max(1,len(ws.get_all_values()))
     ws.append_row([
@@ -76,7 +76,7 @@ def save_random_case(case_type,case_no,year,data):
         data.get("filing",""),data.get("filing_date",""),data.get("efno",""),data.get("efdate",""),
         data.get("stage",""),data.get("nxt",""),data.get("business",""),data.get("purpose",""),
         data.get("hist_next",""),"Done",
-        datetime.now(ZoneInfo("Asia/Kolkata")).strftime("%d-%m-%Y %I:%M %p")
+        datetime.now(timezone(timedelta(hours=5,minutes=30))).strftime("%d-%m-%Y %I:%M %p")
     ])
 
 def save_case_result(row_no,data):
