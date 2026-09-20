@@ -56,7 +56,7 @@ def set_sheet_status(row_no,status):
     get_worksheet().update_cell(row_no,22,status)
 
 def ensure_random_sheet():
-    book=sheet_client().open_by_key(SHEET_ID)
+    book=get_worksheet().spreadsheet
     try:
         return book.worksheet("Random Cases")
     except gspread.WorksheetNotFound:
