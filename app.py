@@ -75,41 +75,49 @@ async def begin_case(update, case_type, case_no, year):
         await page.wait_for_timeout(1200)
 
         # Fill by labels/placeholders first; fall back to likely input/select ordering.
-        # The Case Number tab is active now. Find the VISIBLE dropdown whose
-        # options contain the requested case type (e.g. "CC - Calendar Case").
-        # Do not depend on ancestor/form markup: eCourts changes that wrapper dynamically.
+        # The visible Case Number form is now stable. eCourts may populate the
+        # case-type dropdown lazily, so wait for the CC/AP/etc. options before selecting.
         type_sel=None
-        all_selects=page.locator("select:visible")
-        for i in range(await all_selects.count()):
-            el=all_selects.nth(i)
-            try:
-                opts=await el.locator("option").all_text_contents()
-                match=next((o for o in opts if re.match(r"^\\s*"+re.escape(case_type)+r"\\s*-",o,re.I)),None)
-                if match:
-                    type_sel=el
-                    await el.select_option(label=match)
-                    await page.wait_for_timeout(300)
-                    break
-            except: pass
+        match_label=None
+        for attempt in range(20):
+            all_selects=page.locator("select:visible")
+            for i in range(await all_selects.count()):
+                el=all_selects.nth(i)
+                try:
+                    opts=await el.locator("option").all_text_contents()
+                    match=next((o for o in opts if re.match(r"^\\s*"+re.escape(case_type)+r"\\s*-",o,re.I)),None)
+                    if match:
+                        type_sel=el; match_label=match; break
+                except: pass
+            if type_sel is not None: break
+            await page.wait_for_timeout(250)
         if type_sel is None:
-            raise RuntimeError(f"Case Type {case_type} not found in visible Case Number form")
+            raise RuntimeError(f"Case Type {case_type} option did not load")
 
-        num=await first_visible(page,["input[placeholder='Case Number']:visible","input[name*='case_no' i]:visible","input[id*='case_no' i]:visible","input[name*='caseno' i]:visible","input[id*='caseno' i]:visible"])
-        if num: await num.fill(case_no)
+        # Select by the option's real value (more reliable than its rendered label on this site).
+        opt=type_sel.locator("option").filter(has_text=re.compile(r"^\\s*"+re.escape(case_type)+r"\\s*-",re.I)).first
+        opt_value=await opt.get_attribute("value")
+        if opt_value is not None:
+            await type_sel.select_option(value=opt_value)
+        else:
+            await type_sel.select_option(label=match_label)
+        await page.wait_for_timeout(300)
 
-        yr=await first_visible(page,["input[placeholder='Year']:visible","input[name*='year' i]:visible","input[id*='year' i]:visible","select[name*='year' i]:visible","select[id*='year' i]:visible"])
-        if yr:
-            try:
-                if await yr.evaluate("(e)=>e.tagName")=="SELECT": await yr.select_option(label=year)
-                else: await yr.fill(year)
-            except: pass
+        # Use the exact placeholders visible in the Case Number form.
+        num=page.locator("input[placeholder='Case Number']:visible").first
+        yr=page.locator("input[placeholder='Year']:visible").first
+        if not await num.count(): raise RuntimeError("Visible Case Number input not found")
+        if not await yr.count(): raise RuntimeError("Visible Year input not found")
+        await num.fill(case_no)
+        await yr.fill(year)
 
-        # Verify the required case type really remained selected before asking for CAPTCHA.
-        selected_case_type=""
-        try: selected_case_type=(await type_sel.locator("option:checked").inner_text()).strip()
-        except: pass
+        selected_case_type=(await type_sel.locator("option:checked").inner_text()).strip()
+        actual_no=await num.input_value()
+        actual_year=await yr.input_value()
         if not re.match(r"^"+re.escape(case_type)+r"\\s*-",selected_case_type,re.I):
             raise RuntimeError(f"Case Type selection failed: {selected_case_type or 'Select Case Type'}")
+        if actual_no != case_no or actual_year != year:
+            raise RuntimeError(f"Case fields failed: {actual_no}/{actual_year}")
 
         # Locate CAPTCHA image and send a tight screenshot when possible.
         # eCourts renders the captcha as a visible text/image-like box next to the Captcha label.
