@@ -140,12 +140,12 @@ async def begin_case(update, case_type, case_no, year):
         box=await cap_input.bounding_box()
         vp=page.viewport_size or {"width":1280,"height":720}
 
-        # Crop only the CAPTCHA challenge box immediately left of the speaker button.
-        # The challenge occupies the area roughly 280-120 px left of Enter Captcha.
-        x=max(0,box["x"]-300)
-        y=max(0,box["y"]-12)
-        width=min(165,vp["width"]-x)
-        height=min(58,vp["height"]-y)
+        # Crop the CAPTCHA challenge only. The previous crop included the
+        # speaker/refresh buttons and clipped the leftmost character, so shift left.
+        x=max(0,box["x"]-355)
+        y=max(0,box["y"]-10)
+        width=min(155,vp["width"]-x)
+        height=min(55,vp["height"]-y)
         await page.screenshot(path=shot,clip={"x":x,"y":y,"width":width,"height":height})
 
         sessions[chat]={"pw":pw,"browser":browser,"page":page,"case_type":case_type,"case_no":case_no,"year":year}
