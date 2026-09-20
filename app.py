@@ -132,21 +132,34 @@ async def begin_case(update, case_type, case_no, year):
         if captcha:
             await captcha.screenshot(path=shot)
         else:
-            # Crop the form region around the Enter Captcha input rather than the whole page.
+            # Telegram rejects extremely narrow/tall images. Use a safe fixed-size crop
+            # around the captcha/input area rather than an element screenshot fallback.
             cap_input=await first_visible(page,["input[placeholder='Enter Captcha']","input[placeholder*='Enter Captcha' i]"])
             if cap_input:
                 box=await cap_input.bounding_box()
-                await page.screenshot(path=shot,clip={"x":max(0,box["x"]-310),"y":max(0,box["y"]-25),"width":min(620,1280-max(0,box["x"]-310)),"height":90})
+                vp=page.viewport_size or {"width":1280,"height":720}
+                x=max(0,min(box["x"]-360,vp["width"]-700))
+                y=max(0,min(box["y"]-45,vp["height"]-140))
+                await page.screenshot(path=shot,clip={"x":x,"y":y,"width":min(700,vp["width"]-x),"height":min(140,vp["height"]-y)})
             else:
                 await page.screenshot(path=shot,full_page=False)
 
         sessions[chat]={"pw":pw,"browser":browser,"page":page,"case_type":case_type,"case_no":case_no,"year":year}
-        with open(shot,"rb") as f:
-            await update.message.reply_photo(f,caption=f"{case_type} {case_no}/{year}\nReply with the CAPTCHA text.")
+        try:
+            with open(shot,"rb") as f:
+                await update.message.reply_photo(f,caption=f"{case_type} {case_no}/{year}\nReply with the CAPTCHA text.")
+        except Exception:
+            # If Telegram rejects image dimensions, send it as a document instead.
+            with open(shot,"rb") as f:
+                await update.message.reply_document(f,caption=f"{case_type} {case_no}/{year}\nReply with the CAPTCHA text.")
     except Exception as ex:
-        await page.screenshot(path=f"/tmp/error_{chat}.png",full_page=False)
-        with open(f"/tmp/error_{chat}.png","rb") as f:
-            await update.message.reply_photo(f,caption=f"Could not reach the Case Number form. {type(ex).__name__}: {str(ex)[:700]}")
+        err=f"/tmp/error_{chat}.png"
+        await page.screenshot(path=err,full_page=False)
+        try:
+            with open(err,"rb") as f:
+                await update.message.reply_photo(f,caption=f"Could not reach the Case Number form. {type(ex).__name__}: {str(ex)[:700]}")
+        except Exception:
+            await update.message.reply_text(f"Could not reach the Case Number form. {type(ex).__name__}: {str(ex)[:700]}")
         await browser.close(); await pw.stop()
 
 async def submit_captcha(update,text,s):
