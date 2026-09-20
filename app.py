@@ -485,6 +485,21 @@ async def submit_captcha(update,text,s):
     nxt=after_label("Next Hearing Date",["Case Stage","Court Number and Judge"])
     stage=after_label("Case Stage",["Court Number and Judge","Petitioner and Advocate"])
     judge=after_label("Court Number and Judge",["Petitioner and Advocate","Respondent and Advocate"])
+
+    # Disposed cases normally have no next hearing. Prefer the actual disposal/result
+    # wording shown by eCourts so the sheet does not look like the date is missing.
+    nature=after_label("Nature of Disposal",["Disposal Date","Court Number and Judge","Petitioner and Advocate","Case History"])
+    disposal_date=after_label("Disposal Date",["Nature of Disposal","Court Number and Judge","Petitioner and Advocate","Case History"])
+    disposed_words=("disposed","convicted","acquitted","committal","committed","commitment")
+    is_disposed=any(w in (stage+" "+nature).lower() for w in disposed_words) or bool(disposal_date)
+    if is_disposed:
+        if nature:
+            stage="Disposed - "+nature if "disposed" not in nature.lower() else nature
+        elif stage and "disposed" not in stage.lower():
+            stage="Disposed - "+stage
+        elif not stage:
+            stage="Disposed"
+        nxt=""
     efno=grab(r"e-Filing Number\\s*:?\\s*([A-Za-z0-9./-]+)")
     efdate=grab(r"e-Filing Date\\s*:?\\s*([0-9/-]+)")
 
