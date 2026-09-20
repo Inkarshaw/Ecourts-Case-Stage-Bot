@@ -125,24 +125,24 @@ async def begin_case(update, case_type, case_no, year):
         if actual_no != case_no or actual_year != year:
             raise RuntimeError(f"Case fields failed: {actual_no}/{actual_year}")
 
-        # Locate CAPTCHA image and send a tight screenshot when possible.
-        # eCourts renders the captcha as a visible text/image-like box next to the Captcha label.
-        captcha=await first_visible(page,["img[id*='captcha' i]","img[src*='captcha' i]","canvas[id*='captcha' i]",".captcha",".captcha_box","[id*='captcha' i]:not(input)"])
+        # Send a reliable crop of the CAPTCHA row. Do not screenshot the first
+        # element whose id/class contains "captcha" because eCourts can expose a 1px
+        # decorative/border element that produces a blank line image.
         shot=f"/tmp/captcha_{chat}.png"
-        if captcha:
-            await captcha.screenshot(path=shot)
-        else:
-            # Telegram rejects extremely narrow/tall images. Use a safe fixed-size crop
-            # around the captcha/input area rather than an element screenshot fallback.
-            cap_input=await first_visible(page,["input[placeholder='Enter Captcha']","input[placeholder*='Enter Captcha' i]"])
-            if cap_input:
-                box=await cap_input.bounding_box()
-                vp=page.viewport_size or {"width":1280,"height":720}
-                x=max(0,min(box["x"]-360,vp["width"]-700))
-                y=max(0,min(box["y"]-45,vp["height"]-140))
-                await page.screenshot(path=shot,clip={"x":x,"y":y,"width":min(700,vp["width"]-x),"height":min(140,vp["height"]-y)})
-            else:
-                await page.screenshot(path=shot,full_page=False)
+        cap_input=page.locator("input[placeholder='Enter Captcha']:visible").first
+        if not await cap_input.count():
+            cap_input=await first_visible(page,["input[placeholder*='captcha' i]:visible","input[name*='captcha' i]:visible","input[id*='captcha' i]:visible"])
+        if not cap_input:
+            raise RuntimeError("Visible Enter Captcha input not found")
+        box=await cap_input.bounding_box()
+        vp=page.viewport_size or {"width":1280,"height":720}
+        # Captcha challenge is immediately to the left of the input. Include both so
+        # the human can clearly read the challenge and confirm the correct field.
+        x=max(0,box["x"]-430)
+        y=max(0,box["y"]-35)
+        width=min(760,vp["width"]-x)
+        height=min(120,vp["height"]-y)
+        await page.screenshot(path=shot,clip={"x":x,"y":y,"width":width,"height":height})
 
         sessions[chat]={"pw":pw,"browser":browser,"page":page,"case_type":case_type,"case_no":case_no,"year":year}
         try:
