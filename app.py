@@ -327,17 +327,17 @@ async def submit_captcha(update,text,s):
         stop="|".join(re.escape(x) for x in stop_labels)
         return grab(re.escape(label)+r"\\s*:?\\s*(.+?)(?="+stop+r"|$)") if stop else ""
 
-    filing=after_label("Filing Number",["Filing Date","Registration Number"])
-    filing_date=after_label("Filing Date",["Registration Number","Registration Date"])
-    reg=after_label("Registration Number",["Registration Date","CNR Number"])
-    reg_date=after_label("Registration Date",["CNR Number","e-Filing Number"])
+    filing=grab(r"Filing Number\\s*:?\\s*([A-Za-z0-9./-]+)")
+    filing_date=grab(r"Filing Date\\s*:?\\s*([0-9/-]+)")
+    reg=grab(r"Registration Number\\s*:?\\s*([A-Za-z0-9./-]+)")
+    reg_date=grab(r"Registration Date\\s*:?\\s*([0-9/-]+)")
     cnr=grab(r"CNR Number\\s*:?\\s*([A-Z0-9]{12,})")
     first=after_label("First Hearing Date",["Next Hearing Date","Case Stage"])
     nxt=after_label("Next Hearing Date",["Case Stage","Court Number and Judge"])
     stage=after_label("Case Stage",["Court Number and Judge","Petitioner and Advocate"])
     judge=after_label("Court Number and Judge",["Petitioner and Advocate","Respondent and Advocate"])
-    efno=after_label("e-Filing Number",["e-Filing Date","First Hearing Date"])
-    efdate=after_label("e-Filing Date",["First Hearing Date","Next Hearing Date"])
+    efno=grab(r"e-Filing Number\\s*:?\\s*([A-Za-z0-9./-]+)")
+    efdate=grab(r"e-Filing Date\\s*:?\\s*([0-9/-]+)")
 
     # FIR section labels vary slightly across eCourts establishments.
     fir_no=after_label("FIR Number",["Police Station","Police Station Name","FIR Date","Year"])
@@ -345,24 +345,24 @@ async def submit_captcha(update,text,s):
     if not fir_ps: fir_ps=after_label("Police Station Name",["FIR Number","FIR Date","Year","State"])
     fir_date=after_label("FIR Date",["Police Station","FIR Number","Year","State"])
 
-    parts=[f"📄 {case_type} {case_no}/{year}"]
-    if cnr: parts.append(f"CNR: {cnr}")
-    if judge: parts.append(f"Court/Judge: {judge}")
-    if reg: parts.append(f"Registration: {reg}" + (f" ({reg_date})" if reg_date else ""))
-    if filing: parts.append(f"Filing: {filing}" + (f" ({filing_date})" if filing_date else ""))
-    if efno: parts.append(f"e-Filing: {efno}" + (f" ({efdate})" if efdate else ""))
+    import html
+    esc=lambda v: html.escape(str(v or "").strip())
+    parts=[f"📄 <b>{esc(case_type)} {esc(case_no)}/{esc(year)}</b>"]
+    if cnr: parts.append(f"🔖 <b>CNR:</b> <code>{esc(cnr)}</code>")
+    if judge: parts.append(f"⚖️ <b>Court:</b> {esc(judge)}")
+    if reg: parts.append(f"📝 <b>Registration:</b> {esc(reg)}" + (f" • {esc(reg_date)}" if reg_date else ""))
+    if filing: parts.append(f"📥 <b>Filing:</b> {esc(filing)}" + (f" • {esc(filing_date)}" if filing_date else ""))
+    if efno: parts.append(f"💻 <b>e-Filing:</b> {esc(efno)}" + (f" • {esc(efdate)}" if efdate else ""))
 
     if fir_no or fir_ps or fir_date:
-        parts.extend(["","🚔 FIR Details"])
-        if fir_no: parts.append(f"FIR Number: {fir_no}")
-        if fir_ps: parts.append(f"Police Station: {fir_ps}")
-        if fir_date: parts.append(f"FIR Date: {fir_date}")
+        parts.extend(["","🚔 <b>FIR DETAILS</b>"])
+        if fir_no: parts.append(f"• <b>FIR No.:</b> {esc(fir_no)}")
+        if fir_ps: parts.append(f"• <b>Police Station:</b> {esc(fir_ps)}")
+        if fir_date: parts.append(f"• <b>FIR Date:</b> {esc(fir_date)}")
 
-    # Always show current stage/hearing under the history section, even if expanding
-    # the latest history row fails.
-    parts.extend(["","📚 Latest Case History"])
-    if stage: parts.append(f"Stage: {stage}")
-    if nxt: parts.append(f"Current Next Hearing: {nxt}")
+    parts.extend(["","📚 <b>LATEST CASE STATUS</b>"])
+    if stage: parts.append(f"🔹 <b>Stage:</b> {esc(stage)}")
+    if nxt: parts.append(f"📅 <b>Next Hearing:</b> {esc(nxt)}")
 
     # Find the Case History table and click the chronologically latest hearing-date link.
     try:
@@ -396,14 +396,14 @@ async def submit_captcha(update,text,s):
             if not purpose: purpose=dgrab("Purpose of hearing",["Next Hearing Date","Business"])
             hist_next=dgrab("Next Hearing Date",["Business","Next Purpose","Purpose of hearing"])
 
-            parts.append(f"Last Hearing: {history_date}")
-            if business: parts.append(f"Business: {business}")
-            if purpose: parts.append(f"Next Purpose: {purpose}")
-            if hist_next: parts.append(f"History Next Hearing: {hist_next}")
+            parts.append(f"🕘 <b>Last Hearing:</b> {esc(history_date)}")
+            if business: parts.append(f"📋 <b>Business:</b> {esc(business)}")
+            if purpose: parts.append(f"➡️ <b>Next Purpose:</b> {esc(purpose)}")
+            if hist_next: parts.append(f"📆 <b>History Next Hearing:</b> {esc(hist_next)}")
     except Exception as ex:
-        parts.append(f"History detail unavailable: {type(ex).__name__}")
+        pass
 
-    await update.message.reply_text("\\n".join(parts))
+    await update.message.reply_text("\\n".join(parts),parse_mode="HTML")
 
 async def handle(update:Update, context:ContextTypes.DEFAULT_TYPE):
     text=(update.message.text or "").strip()
