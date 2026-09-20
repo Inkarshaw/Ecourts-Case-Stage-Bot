@@ -220,17 +220,44 @@ async def submit_captcha(update,text,s):
     # Do not mistake the site's global navigation ("CNR Number / Case Status / Court Orders")
     # for an actual case result. A successful Case Number search first shows a result row
     # with a View action; open it before parsing case details.
-    view=page.get_by_text(re.compile(r"^View$",re.I))
-    if await view.count():
-        try:
-            for i in range(await view.count()):
-                if await view.nth(i).is_visible():
-                    await view.nth(i).click()
-                    await page.wait_for_timeout(2500)
-                    body=await page.locator("body").inner_text()
-                    low=body.lower()
-                    break
-        except: pass
+    # Search result is a table row (CC/1001/2025 ... View). Click that row's
+    # View control before attempting to parse case history/details.
+    clicked_view=False
+    try:
+        rows=page.locator("tr")
+        target=None
+        case_key=f"{case_type}/{case_no}/{year}".replace(" ","").lower()
+        for i in range(await rows.count()):
+            row=rows.nth(i)
+            try:
+                txt=(await row.inner_text()).replace(" ","").lower()
+                if case_key in txt:
+                    target=row; break
+            except: pass
+        scope=target if target is not None else page
+        candidates=scope.locator("a,button,input[type='button'],input[type='submit']")
+        for i in range(await candidates.count()):
+            el=candidates.nth(i)
+            try:
+                txt=((await el.inner_text()) or "").strip()
+            except: txt=""
+            try:
+                val=((await el.get_attribute("value")) or "").strip()
+            except: val=""
+            if txt.lower()=="view" or val.lower()=="view":
+                await el.click()
+                clicked_view=True
+                break
+        if not clicked_view:
+            v=scope.get_by_text("View",exact=True)
+            if await v.count():
+                await v.first.click(); clicked_view=True
+        if clicked_view:
+            await page.wait_for_timeout(3000)
+            body=await page.locator("body").inner_text()
+            low=body.lower()
+    except Exception as ex:
+        await update.message.reply_text(f"Result found, but View could not be opened: {type(ex).__name__}: {str(ex)[:300]}")
 
     # Require detail-page labels, not generic menu/help text.  "Case Type" and
     # navigation headings alone are NOT evidence that a case result was opened.
